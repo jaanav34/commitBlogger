@@ -6,6 +6,11 @@ Exporter Module: Triggers Simply Static to export the WordPress site to static H
 import os
 import requests
 import time
+import logging
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_log, after_log, before_sleep_log
+
+# Configure logging for this module
+logger = logging.getLogger(__name__)
 
 class Exporter:
     """
@@ -13,7 +18,7 @@ class Exporter:
     Assumes Simply Static is configured to export to a local folder.
     """
 
-    def __init__(self, wordpress_url: str, simply_static_export_trigger_url: str = None, export_path: str = None):
+    def __init__(self, wordpress_url: str, simply_static_export_trigger_url: str, export_path: str):
         """
         Initializes the Exporter.
 
@@ -29,8 +34,13 @@ class Exporter:
         self.simply_static_export_trigger_url = simply_static_export_trigger_url
         self.export_path = export_path
         if self.export_path and not os.path.exists(self.export_path):
-            print(f"Warning: Export path {self.export_path} does not exist. Please ensure Simply Static is configured correctly.")
+            logger.warning(f"Export path {self.export_path} does not exist. Please ensure Simply Static is configured correctly.")
 
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
+           stop=stop_after_attempt(3),
+           retry=retry_if_exception_type(requests.exceptions.RequestException),
+           before_sleep=before_sleep_log(logger, logging.INFO),
+           after=after_log(logger, logging.WARNING))
     def trigger_simply_static_export(self) -> bool:
         """
         Triggers the Simply Static export process via a configured URL.
@@ -39,26 +49,23 @@ class Exporter:
             bool: True if the trigger was successful, False otherwise.
         """
         if not self.simply_static_export_trigger_url:
-            print("Simply Static export trigger URL not provided. Please trigger export manually.")
+            logger.warning("Simply Static export trigger URL not provided. Please trigger export manually.")
             return False
 
-        print(f"Attempting to trigger Simply Static export via: {self.simply_static_export_trigger_url}")
+        logger.info(f"Attempting to trigger Simply Static export via: {self.simply_static_export_trigger_url}")
         try:
             response = requests.get(self.simply_static_export_trigger_url, timeout=60)
             response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
-            print(f"Simply Static export triggered successfully. Response: {response.text[:200]}...")
-            # TODO: Implement a more robust way to check if the export is complete.
-            # This might involve polling a status endpoint if Simply Static provides one,
-            # or waiting for a certain file to appear/be modified in the export_path.
+            logger.info(f"Simply Static export triggered successfully. Response: {response.text[:200]}...")
             return True
         except requests.exceptions.RequestException as e:
-            print(f"Error triggering Simply Static export: {e}")
-            return False
+            logger.error(f"Error triggering Simply Static export: {e}")
+            raise # Re-raise to trigger retry
 
     def wait_for_export_completion(self, timeout: int = 300, check_interval: int = 10) -> bool:
         """
         Waits for the Simply Static export to complete by checking for the existence
-        of a key file or directory in the export path.
+        and recent modification of files in the export path.
 
         Args:
             timeout (int): Maximum time to wait in seconds.
@@ -68,21 +75,48 @@ class Exporter:
             bool: True if export completed within timeout, False otherwise.
         """
         if not self.export_path:
-            print("Export path not specified. Cannot wait for export completion automatically.")
+            logger.warning("Export path not specified. Cannot wait for export completion automatically.")
             return False
 
-        print(f"Waiting for Simply Static export to complete in {self.export_path}...")
+        logger.info(f"Waiting for Simply Static export to complete in {self.export_path}...")
         start_time = time.time()
+        last_mod_time = 0
+        initial_file_count = 0
+
+        # Get initial state of the directory
+        if os.path.exists(self.export_path):
+            initial_file_count = len(os.listdir(self.export_path))
+            try:
+                last_mod_time = os.path.getmtime(self.export_path)
+            except OSError:
+                pass # Directory might be empty or inaccessible initially
+
         while time.time() - start_time < timeout:
-            # TODO: Implement a more sophisticated check for export completion.
-            # For example, check for a specific file that is known to be generated last,
-            # or check if the directory modification time has updated recently.
-            # For now, a simple check for directory existence is used.
-            if os.path.exists(self.export_path) and len(os.listdir(self.export_path)) > 0:
-                print("Simply Static export directory seems to be populated.")
+            current_file_count = 0
+            current_mod_time = 0
+
+            if os.path.exists(self.export_path):
+                current_file_count = len(os.listdir(self.export_path))
+                try:
+                    current_mod_time = os.path.getmtime(self.export_path)
+                except OSError:
+                    pass
+
+            # Check if files have appeared or directory has been modified recently
+            if current_file_count > 0 and current_mod_time > last_mod_time:
+                logger.info("Simply Static export directory is being populated/modified.")
+                last_mod_time = current_mod_time # Update last modification time
+                # Continue waiting for a short period to ensure all files are written
+                time.sleep(check_interval / 2) 
+                
+            # If directory is populated and no recent changes, assume complete
+            if current_file_count > 0 and (time.time() - last_mod_time > check_interval):
+                logger.info("Simply Static export appears to be complete (no recent changes detected).")
                 return True
+
             time.sleep(check_interval)
-        print("Timeout waiting for Simply Static export completion.")
+
+        logger.warning("Timeout waiting for Simply Static export completion.")
         return False
 
     def get_export_path(self) -> str:
@@ -98,15 +132,27 @@ if __name__ == '__main__':
     SIMPLY_STATIC_TRIGGER_URL = os.getenv("SIMPLY_STATIC_TRIGGER_URL") # e.g., http://localhost/wordpress/?simply_static_export=1
     STATIC_EXPORT_PATH = os.getenv("STATIC_EXPORT_PATH", "/tmp/simply-static-export")
 
+    # Create a dummy export path for testing
+    if not os.path.exists(STATIC_EXPORT_PATH):
+        os.makedirs(STATIC_EXPORT_PATH, exist_ok=True)
+        print(f"Created dummy export path: {STATIC_EXPORT_PATH}")
+
     exporter = Exporter(
         wordpress_url=WP_URL,
-        simply_static_export_trigger_url=SIMPLY_STATIC_TRIGGER_URL,
+        simply_static_export_trigger_url=SIMPLY_STATIC_TRIGGER_URL, # type:ignore
         export_path=STATIC_EXPORT_PATH
     )
 
     # Example: Trigger and wait for export
     # if exporter.trigger_simply_static_export():
-    #     if exporter.wait_for_export_completion():
+    #     # Simulate files being written to the directory over time
+    #     print("Simulating file writing...")
+    #     for i in range(3):
+    #         with open(os.path.join(STATIC_EXPORT_PATH, f"test_file_{i}.html"), "w") as f:
+    #             f.write(f"<html><body>Test {i}</body></html>")
+    #         time.sleep(5) # Simulate delay in file writing
+
+    #     if exporter.wait_for_export_completion(timeout=30, check_interval=2):
     #         print("Simply Static export process finished.")
     #     else:
     #         print("Simply Static export did not complete in time.")

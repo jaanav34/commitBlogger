@@ -6,6 +6,11 @@ to generate blog posts, LinkedIn summaries, and click-worthy titles.
 
 import os
 import google.generativeai as genai
+import logging
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_log, after_log
+
+# Configure logging for this module
+logger = logging.getLogger(__name__)
 
 class Transformer:
     """
@@ -23,9 +28,34 @@ class Transformer:
         genai.configure(api_key=gemini_api_key)
         self.model = genai.GenerativeModel("gemini-pro") # Or gemini-1.5-pro if available and desired
 
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
+           stop=stop_after_attempt(3),
+           retry=retry_if_exception_type(genai.types.BlockedPromptException),
+           before_sleep=before_log(logger, logging.INFO),
+           after=after_log(logger, logging.WARNING))
+    def _call_gemini(self, prompt: str) -> str:
+        """
+        Helper function to call Gemini API with retry logic and error handling.
+        """
+        try:
+            response = self.model.generate_content(prompt)
+            if response._error_message: # type: ignore
+                logger.error(f"Gemini API error: {response._error_message}") # type: ignore
+                return ""
+            return response.text
+        except genai.types.BlockedPromptException as e:
+            logger.warning(f"Gemini prompt blocked: {e}. Adjusting prompt or skipping.")
+            return ""
+        except genai.types.StopCandidateException as e:
+            logger.warning(f"Gemini generation stopped prematurely: {e}. Partial content might be returned.")
+            return ""
+        except Exception as e:
+            logger.error(f"Unexpected error during Gemini API call: {e}", exc_info=True)
+            return ""
+
     def _summarize_diff(self, files_changed: list) -> str:
         """
-        Summarizes the code changes from the diffs.
+        Summarizes the code changes from the diffs. Uses Gemini for large diffs.
 
         Args:
             files_changed (list): A list of dictionaries, each representing a changed file
@@ -34,23 +64,28 @@ class Transformer:
         Returns:
             str: A concise summary of the changes.
         """
-        diff_summary = []
+        diff_texts = []
         for file in files_changed:
             filename = file.get("filename", "Unknown File")
             status = file.get("status", "")
             patch = file.get("patch", "")
 
-            summary_line = f"File: {filename} ({status})\n"
             if patch:
-                # Simple heuristic to get a few lines from the patch for summary
-                lines = patch.split("\n")
-                relevant_lines = [line for line in lines if line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))]
-                summary_line += "\n".join(relevant_lines[:5]) + ("..." if len(relevant_lines) > 5 else "")
-            diff_summary.append(summary_line)
+                # If patch is too long, ask Gemini to summarize it
+                if len(patch) > 1000: # Arbitrary threshold for large diffs
+                    logger.info(f"Summarizing large diff for {filename} using Gemini.")
+                    summary_prompt = f"Summarize the following code diff for file {filename} ({status}):\n```\n{patch}\n```\nProvide a concise summary focusing on the key changes and their purpose."
+                    diff_summary_text = self._call_gemini(summary_prompt)
+                    diff_texts.append(f"File: {filename} ({status})\nSummary: {diff_summary_text}")
+                else:
+                    # Simple heuristic to get a few lines from the patch for summary
+                    lines = patch.split("\n")
+                    relevant_lines = [line for line in lines if line.startswith(("+", "-", " ")) and not line.startswith(("++3", "---"))]
+                    diff_texts.append(f"File: {filename} ({status})\n" + "\n".join(relevant_lines[:10]) + ("..." if len(relevant_lines) > 10 else ""))
+            else:
+                diff_texts.append(f"File: {filename} ({status}) - No patch content available.")
         
-        # TODO: For very large diffs, consider using Gemini to summarize the diff itself
-        # This would require another API call or a more sophisticated local parsing.
-        return "\n\n".join(diff_summary) if diff_summary else "No significant code changes detected."
+        return "\n\n".join(diff_texts) if diff_texts else "No significant code changes detected."
 
     def generate_blog_post(self, commit_message: str, files_changed: list, notion_content: str = "") -> str:
         """
@@ -91,14 +126,8 @@ Your blog post should:
 4.  Be approximately 300-500 words, structured with headings and bullet points where appropriate.
 5.  Include a brief introduction and conclusion.
 """
-        print("Generating blog post with Gemini...")
-        try:
-            response = self.model.generate_content(prompt)
-            # TODO: Add error handling for content filtering or empty responses
-            return response.text
-        except Exception as e:
-            print(f"Error generating blog post: {e}")
-            return ""
+        logger.info("Generating blog post with Gemini...")
+        return self._call_gemini(prompt)
 
     def generate_linkedin_summary(self, commit_message: str, files_changed: list, notion_content: str = "") -> str:
         """
@@ -135,13 +164,8 @@ Focus on the value and impact of the changes, suitable for a professional networ
 
 Include relevant keywords and a call to action if appropriate (e.g., "Learn more in my latest blog post").
 """
-        print("Generating LinkedIn summary with Gemini...")
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            print(f"Error generating LinkedIn summary: {e}")
-            return ""
+        logger.info("Generating LinkedIn summary with Gemini...")
+        return self._call_gemini(prompt)
 
     def generate_click_worthy_title(self, commit_message: str, blog_post_content: str) -> str:
         """
@@ -170,15 +194,10 @@ Prioritize titles that are engaging, informative, and include relevant keywords.
 
 Provide only the titles, one per line, without any additional text or numbering.
 """
-        print("Generating click-worthy titles with Gemini...")
-        try:
-            response = self.model.generate_content(prompt)
-            # Return the first title or a selection mechanism later
-            titles = [t.strip() for t in response.text.split("\n") if t.strip()]
-            return titles[0] if titles else "Default Blog Post Title"
-        except Exception as e:
-            print(f"Error generating titles: {e}")
-            return "Default Blog Post Title"
+        logger.info("Generating click-worthy titles with Gemini...")
+        response_text = self._call_gemini(prompt)
+        titles = [t.strip() for t in response_text.split("\n") if t.strip()]
+        return titles[0] if titles else "Default Blog Post Title"
 
 # Example Usage (for testing purposes, will be removed in final main.py)
 if __name__ == '__main__':
@@ -215,6 +234,5 @@ if __name__ == '__main__':
         # Generate click-worthy title
         title = transformer.generate_click_worthy_title(sample_commit_message, blog_post)
         print("\n--- Generated Title ---\n", title)
-
 
 

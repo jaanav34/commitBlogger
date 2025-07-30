@@ -5,11 +5,18 @@ via XML-RPC or REST API.
 """
 
 import os
+import logging
+import mimetypes
+from typing import Optional
 from wordpress_xmlrpc import Client, WordPressPost
 from wordpress_xmlrpc.methods.posts import NewPost, EditPost
 from wordpress_xmlrpc.methods.media import UploadFile
 from wordpress_xmlrpc.methods.taxonomies import GetTerms, NewTerm
 from wordpress_xmlrpc.compat import xmlrpc_client
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_log, after_log
+
+# Configure logging for this module
+logger = logging.getLogger(__name__)
 
 class Publisher:
     """
@@ -26,9 +33,14 @@ class Publisher:
             app_password (str): Your WordPress application password.
         """
         self.client = Client(xmlrpc_url, username, app_password)
-        print(f"Connected to WordPress XML-RPC at {xmlrpc_url}")
+        logger.info(f"Connected to WordPress XML-RPC at {xmlrpc_url}")
 
-    def publish_post(self, title: str, content_md: str, tags: list = None, categories: list = None, status: str = 'publish') -> str:
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
+           stop=stop_after_attempt(5),
+           retry=retry_if_exception_type(xmlrpc_client.Fault),
+           before_sleep=before_log(logger, logging.INFO), # type: ignore
+           after=after_log(logger, logging.WARNING))
+    def publish_post(self, title: str, content_md: str, tags: Optional[list] = None, categories: Optional[list] = None, status: str = 'publish') -> Optional[str]:
         """
         Publishes a new post to WordPress.
 
@@ -40,29 +52,36 @@ class Publisher:
             status (str): The status of the post (e.g., 'publish', 'draft'). Defaults to 'publish'.
 
         Returns:
-            str: The ID of the newly created post, or None if an error occurred.
+            Optional[str]: The ID of the newly created post, or None if an error occurred.
         """
         post = WordPressPost()
-        post.title = title
-        post.content = content_md
-        post.post_status = status
+        post.title = title  # type: ignore
+        post.content = content_md  # type: ignore
+        post.post_status = status  # type: ignore
 
         if tags:
-            post.terms_names.tags = tags
+            post.terms_names['post_tag'] = tags  # type: ignore
         if categories:
-            post.terms_names.category = categories
+            post.terms_names['category'] = categories  # type: ignore
 
-        print(f"Attempting to publish post: {title}")
+        logger.info(f"Attempting to publish post: {title}")
         try:
-            post_id = self.client.call(NewPost(post))
-            print(f"Successfully published post with ID: {post_id}")
+            post_id: str = self.client.call(NewPost(post))  # type: ignore
+            logger.info(f"Successfully published post with ID: {post_id}")
             return post_id
+        except xmlrpc_client.Fault as e:
+            logger.error(f"WordPress XML-RPC error publishing post: {e}")
+            raise # Re-raise to trigger retry
         except Exception as e:
-            print(f"Error publishing post: {e}")
-            # TODO: Implement robust error handling and retry mechanism
+            logger.error(f"Unexpected error publishing post: {e}", exc_info=True)
             return None
 
-    def update_post(self, post_id: str, title: str = None, content_md: str = None, tags: list = None, categories: list = None, status: str = None) -> bool:
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
+           stop=stop_after_attempt(5),
+           retry=retry_if_exception_type(xmlrpc_client.Fault),
+           before_sleep=before_log(logger, logging.INFO), # type: ignore
+           after=after_log(logger, logging.WARNING))
+    def update_post(self, post_id: str, title: Optional[str] = None, content_md: Optional[str] = None, tags: Optional[list] = None, categories: Optional[list] = None, status: Optional[str] = None) -> bool:
         """
         Updates an existing post in WordPress.
 
@@ -77,63 +96,83 @@ class Publisher:
         Returns:
             bool: True if the post was updated successfully, False otherwise.
         """
-        post = WordPressPost(post_id)
-        if title: post.title = title
-        if content_md: post.content = content_md
-        if tags: post.terms_names.tags = tags
-        if categories: post.terms_names.category = categories
-        if status: post.post_status = status
+        post = WordPressPost()
+        if title: post.title = title  # type: ignore
+        if content_md: post.content = content_md  # type: ignore
+        if tags: post.terms_names['post_tag'] = tags  # type: ignore
+        if categories: post.terms_names['category'] = categories  # type: ignore
+        if status: post.post_status = status  # type: ignore
 
-        print(f"Attempting to update post with ID: {post_id}")
+        logger.info(f"Attempting to update post with ID: {post_id}")
         try:
             self.client.call(EditPost(post_id, post))
-            print(f"Successfully updated post with ID: {post_id}")
+            logger.info(f"Successfully updated post with ID: {post_id}")
             return True
+        except xmlrpc_client.Fault as e:
+            logger.error(f"WordPress XML-RPC error updating post {post_id}: {e}")
+            raise # Re-raise to trigger retry
         except Exception as e:
-            print(f"Error updating post {post_id}: {e}")
+            logger.error(f"Unexpected error updating post {post_id}: {e}", exc_info=True)
             return False
 
-    def upload_media(self, file_path: str, mime_type: str = None) -> str:
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
+           stop=stop_after_attempt(5),
+           retry=retry_if_exception_type(xmlrpc_client.Fault),
+           before_sleep=before_log(logger, logging.INFO), # type: ignore
+           after=after_log(logger, logging.WARNING))
+    def upload_media(self, file_path: str, mime_type: Optional[str] = None) -> Optional[str]:
         """
         Uploads a media file to WordPress.
 
         Args:
             file_path (str): Absolute path to the file to upload.
-            mime_type (str, optional): The MIME type of the file (e.g., 'image/png', 'image/jpeg').
+            mime_type (Optional[str]): The MIME type of the file (e.g., 'image/png', 'image/jpeg').
                                        If None, it tries to guess from file extension.
 
         Returns:
-            str: The URL of the uploaded file, or None if an error occurred.
+            Optional[str]: The URL of the uploaded file, or None if an error occurred.
         """
-        print(f"Attempting to upload media: {file_path}")
+        logger.info(f"Attempting to upload media: {file_path}")
         data = {
             'name': os.path.basename(file_path),
             'type': mime_type if mime_type else self._guess_mime_type(file_path),
         }
 
-        with open(file_path, 'rb') as f:
-            data['bits'] = xmlrpc_client.Binary(f.read())
+        try:
+            with open(file_path, 'rb') as f:
+                data['bits'] = xmlrpc_client.Binary(f.read())
+        except FileNotFoundError:
+            logger.error(f"Media file not found: {file_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Error reading media file {file_path}: {e}", exc_info=True)
+            return None
 
         try:
-            response = self.client.call(UploadFile(data))
-            print(f"Successfully uploaded media. URL: {response['url']}")
+            response: dict = self.client.call(UploadFile(data))  # type: ignore
+            logger.info(f"Successfully uploaded media. URL: {response['url']}")
             return response['url']
+        except xmlrpc_client.Fault as e:
+            logger.error(f"WordPress XML-RPC error uploading media {file_path}: {e}")
+            raise # Re-raise to trigger retry
         except Exception as e:
-            print(f"Error uploading media {file_path}: {e}")
+            logger.error(f"Unexpected error uploading media {file_path}: {e}", exc_info=True)
             return None
 
     def _guess_mime_type(self, file_path: str) -> str:
         """
         Helper to guess MIME type based on file extension.
+        Uses the standard library `mimetypes` module.
         """
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext == ".png": return "image/png"
-        if ext == ".jpg" or ext == ".jpeg": return "image/jpeg"
-        if ext == ".gif": return "image/gif"
-        if ext == ".pdf": return "application/pdf"
-        # TODO: Add more MIME types as needed
-        return "application/octet-stream"
+        mimetypes.init()
+        mime_type, _ = mimetypes.guess_type(file_path)
+        return mime_type or "application/octet-stream"
 
+    @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
+           stop=stop_after_attempt(5),
+           retry=retry_if_exception_type(xmlrpc_client.Fault),
+           before_sleep=before_log(logger, logging.INFO), # type: ignore
+           after=after_log(logger, logging.WARNING))
     def ensure_category_exists(self, category_name: str) -> bool:
         """
         Ensures a category exists in WordPress, creating it if necessary.
@@ -144,20 +183,23 @@ class Publisher:
         Returns:
             bool: True if the category exists or was created, False otherwise.
         """
-        print(f"Ensuring category '{category_name}' exists...")
+        logger.info(f"Ensuring category '{category_name}' exists...")
         try:
             categories = self.client.call(GetTerms('category'))
             for cat in categories:
                 if cat.name == category_name:
-                    print(f"Category '{category_name}' already exists.")
+                    logger.info(f"Category '{category_name}' already exists.")
                     return True
             
             # Category does not exist, create it
             self.client.call(NewTerm(category_name, 'category'))
-            print(f"Category '{category_name}' created.")
+            logger.info(f"Category '{category_name}' created.")
             return True
+        except xmlrpc_client.Fault as e:
+            logger.error(f"WordPress XML-RPC error ensuring category '{category_name}': {e}")
+            raise # Re-raise to trigger retry
         except Exception as e:
-            print(f"Error ensuring category '{category_name}': {e}")
+            logger.error(f"Unexpected error ensuring category '{category_name}': {e}", exc_info=True)
             return False
 
 # Example Usage (for testing purposes, will be removed in final main.py)
@@ -191,6 +233,3 @@ if __name__ == '__main__':
 
         # Example: Ensure a category exists
         # publisher.ensure_category_exists('New Category')
-
-
-
