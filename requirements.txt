@@ -1,0 +1,12 @@
+# Core dependencies for the Automated Blog Generator
+PyGithub==1.59.1
+google-generativeai==0.3.2
+notion-client==2.2.1
+python-wordpress-xmlrpc==2.3
+requests==2.31.0
+
+# Optional dependencies for enhanced functionality
+python-dotenv==1.0.0  # For loading environment variables from .env file
+tenacity==8.2.3       # For retry logic with exponential backoff
+
+
