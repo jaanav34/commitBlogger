@@ -3,6 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 .vscode/
+linkedin_summaries/
 # C extensions
 *.so
 

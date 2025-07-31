@@ -26,7 +26,7 @@ class Transformer:
             gemini_api_key (str): Your Google AI Studio Gemini API key.
         """
         genai.configure(api_key=gemini_api_key)
-        self.model = genai.GenerativeModel("gemini-pro") # Or gemini-1.5-pro if available and desired
+        self.model = genai.GenerativeModel("gemini-2.5-flash") # Or gemini-1.5-pro if available and desired
 
     @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
            stop=stop_after_attempt(3),
@@ -37,12 +37,22 @@ class Transformer:
         """
         Helper function to call Gemini API with retry logic and error handling.
         """
+        response = None  # Initialize response to handle cases where assignment fails
         try:
+            # response = "called 2.5 flash with prompt: \n" + prompt
+            logging.info(f"Calling Gemini API with prompt: {prompt[:100]}...")  # Log first 100 chars for brevity
             response = self.model.generate_content(prompt)
-            if response._error_message: # type: ignore
-                logger.error(f"Gemini API error: {response._error_message}") # type: ignore
-                return ""
+            # The .text accessor is the safest way to get the content.
+            # It raises a ValueError if the response is blocked or has no text.
             return response.text
+        except ValueError:
+            # This can happen if the response is blocked for safety reasons.
+            # Log the feedback for debugging, checking if response exists first.
+            if response:
+                logger.warning(f"Gemini returned no content. It may have been blocked. Prompt feedback: {response.prompt_feedback}")
+            else:
+                logger.warning("Gemini call failed with ValueError before a response object was created.")
+            return ""
         except genai.types.BlockedPromptException as e:
             logger.warning(f"Gemini prompt blocked: {e}. Adjusting prompt or skipping.")
             return ""
@@ -234,5 +244,3 @@ if __name__ == '__main__':
         # Generate click-worthy title
         title = transformer.generate_click_worthy_title(sample_commit_message, blog_post)
         print("\n--- Generated Title ---\n", title)
-
-

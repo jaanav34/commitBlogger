@@ -7,6 +7,7 @@ via XML-RPC or REST API.
 import os
 import logging
 import mimetypes
+import socket
 from typing import Optional
 from wordpress_xmlrpc import Client, WordPressPost
 from wordpress_xmlrpc.methods.posts import NewPost, EditPost
@@ -32,8 +33,17 @@ class Publisher:
             username (str): Your WordPress username.
             app_password (str): Your WordPress application password.
         """
-        self.client = Client(xmlrpc_url, username, app_password)
-        logger.info(f"Connected to WordPress XML-RPC at {xmlrpc_url}")
+        try:
+            self.client = Client(xmlrpc_url, username, app_password)
+            logger.info(f"Successfully connected to WordPress XML-RPC at {xmlrpc_url}")
+        except socket.gaierror as e:
+            logger.critical(f"DNS lookup failed for WordPress URL '{xmlrpc_url}'. [Errno {e.errno}] {e.strerror}")
+            logger.critical("Please ensure the WordPress site is running and the WP_XMLRPC_URL in your .env file is a resolvable hostname (e.g., 'http://localhost:10010/xmlrpc.php' or a valid public domain).")
+            # Re-raising the original exception to stop the application.
+            raise
+        except Exception as e:
+            logger.critical(f"Failed to connect to WordPress at {xmlrpc_url}: {e}", exc_info=True)
+            raise
 
     @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
            stop=stop_after_attempt(5),
@@ -59,11 +69,14 @@ class Publisher:
         post.content = content_md  # type: ignore
         post.post_status = status  # type: ignore
 
+        terms_names_dict = {}
         if tags:
-            post.terms_names['post_tag'] = tags  # type: ignore
+            terms_names_dict['post_tag'] = tags
         if categories:
-            post.terms_names['category'] = categories  # type: ignore
+            terms_names_dict['category'] = categories
 
+        if terms_names_dict:
+            post.terms_names = terms_names_dict  # type: ignore
         logger.info(f"Attempting to publish post: {title}")
         try:
             post_id: str = self.client.call(NewPost(post))  # type: ignore
@@ -99,10 +112,16 @@ class Publisher:
         post = WordPressPost()
         if title: post.title = title  # type: ignore
         if content_md: post.content = content_md  # type: ignore
-        if tags: post.terms_names['post_tag'] = tags  # type: ignore
-        if categories: post.terms_names['category'] = categories  # type: ignore
         if status: post.post_status = status  # type: ignore
 
+        terms_names_dict = {}
+        if tags:
+            terms_names_dict['post_tag'] = tags
+        if categories:
+            terms_names_dict['category'] = categories
+
+        if terms_names_dict:
+            post.terms_names = terms_names_dict  # type: ignore
         logger.info(f"Attempting to update post with ID: {post_id}")
         try:
             self.client.call(EditPost(post_id, post))

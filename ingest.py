@@ -7,6 +7,7 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
 from github import Github, RateLimitExceededException, UnknownObjectException, GithubException
 from notion_client import Client
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_log, after_log
@@ -86,7 +87,7 @@ class Ingester:
         """
         Helper to get GitHub repository with retry logic.
         """
-        return self.github_client.get_user().get_repo(repo_name)
+        return self.github_client.get_repo(repo_name)
 
     @retry(wait=wait_exponential(multiplier=1, min=4, max=10),
            stop=stop_after_attempt(5),
@@ -171,13 +172,13 @@ class Ingester:
             logger.critical(f"An unexpected error occurred during GitHub ingestion: {e}", exc_info=True)
             return []
 
-    def fetch_notion_notes(self, database_id: str, since_date: datetime) -> list:
+    def fetch_notion_notes(self, database_id: str, since_date: Optional[datetime]) -> list:
         """
         Fetches notes (pages) from a Notion database.
 
         Args:
             database_id (str): The ID of the Notion database.
-            since_date (datetime, optional): Only fetch notes created/updated after this date.
+            since_date (Optional[datetime]): Only fetch notes created/updated after this date.
 
         Returns:
             list: A list of dictionaries, each representing a Notion page with relevant details.
@@ -189,13 +190,15 @@ class Ingester:
         logger.info(f"Fetching Notion notes from database {database_id}...")
         notes_data = []
         try:
-            filter_obj = {}
+            filter_obj = None
             if since_date:
                 filter_obj = {
+                    "timestamp": "last_edited_time",
                     "last_edited_time": {
                         "on_or_after": since_date.isoformat()
                     }
                 }
+
 
             # Notion API integration to fetch notes with pagination and filtering
             has_more = True
