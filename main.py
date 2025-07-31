@@ -165,19 +165,30 @@ async def run_pipeline(mode: str, since_days: int = 7):
 
         logger.info("Triggering static site export and deployment...")
         try:
-            if exporter.trigger_simply_static_export():
-                if exporter.wait_for_export_completion():
-                    logger.info("Export completed successfully. Proceeding to deployment.")
-                    if deployer.deploy(commit_message="Manual export and deploy trigger"):
-                        logger.info("Static site successfully deployed to GitHub Pages.")
+            trigger_url = config.get("simply_static_trigger_url")
+            if trigger_url:
+                # Remote-trigger flow (when URL is provided)
+                if exporter.trigger_simply_static_export():
+                    if exporter.wait_for_export_completion():
+                        logger.info("Simply Static export completed via trigger URL. Proceeding to deployment.")
                     else:
-                        logger.error("Deployment to GitHub Pages failed.")
+                        logger.error("Simply Static export did not complete in time.")
+                        return
                 else:
-                    logger.error("Simply Static export did not complete in time.")
+                    logger.error("Failed to trigger Simply Static export via URL.")
+                    return
             else:
-                logger.error("Failed to trigger Simply Static export.")
+                # No trigger URL: assume static-export folder is already populated
+                logger.info("No Simply Static trigger URL provided; using pre-exported files at: "
+                            f"{config['simply_static_export_path']}")
+
+            # Deploy whatever is in the export folder
+            if deployer.deploy(commit_message="Automated blog update from pipeline"):
+                logger.info("Static site successfully deployed to GitHub Pages.")
+            else:
+                logger.error("Failed to deploy static site to GitHub Pages.")
         except Exception as e:
-            logger.error(f"An error occurred during export-only mode: {e}", exc_info=True)
+            logger.error(f"Error during export or deployment phase: {e}", exc_info=True)
         
         logger.info("Export-only mode finished.")
         return # Exit the pipeline early
@@ -335,23 +346,31 @@ async def run_pipeline(mode: str, since_days: int = 7):
     if posts_were_published:
         logger.info("Export & Deployment Phase: Generating static site and deploying...")
         try:
-            if exporter.trigger_simply_static_export():
-                if exporter.wait_for_export_completion():
-                    logger.info("Simply Static export completed. Proceeding to deployment.")
-                    if deployer.deploy(commit_message="Automated blog update from pipeline"):
-                        logger.info("Static site successfully deployed to GitHub Pages.")
+            trigger_url = config.get("simply_static_trigger_url")
+            if trigger_url:
+                # Remote-trigger flow (when URL is provided)
+                if exporter.trigger_simply_static_export():
+                    if exporter.wait_for_export_completion():
+                        logger.info("Simply Static export completed via trigger URL. Proceeding to deployment.")
                     else:
-                        logger.error("Failed to deploy static site to GitHub Pages.")
+                        logger.error("Simply Static export did not complete in time.")
+                        return
                 else:
-                    logger.error("Simply Static export did not complete in time.")
+                    logger.error("Failed to trigger Simply Static export via URL.")
+                    return
             else:
-                logger.error("Failed to trigger Simply Static export.")
+                # No trigger URL: assume static-export folder is already populated
+                logger.info("No Simply Static trigger URL provided; using pre-exported files at: "
+                            f"{config['simply_static_export_path']}")
+
+            # Deploy whatever is in the export folder
+            if deployer.deploy(commit_message="Automated blog update from pipeline"):
+                logger.info("Static site successfully deployed to GitHub Pages.")
+            else:
+                logger.error("Failed to deploy static site to GitHub Pages.")
         except Exception as e:
             logger.error(f"Error during export or deployment phase: {e}", exc_info=True)
-    else:
-        logger.info("No new posts were published. Skipping export and deployment.")
 
-    logger.info("Automated Blog Generator pipeline finished.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Automated Blog Generator Pipeline.")
