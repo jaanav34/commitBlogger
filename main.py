@@ -96,18 +96,18 @@ def process_single_commit(commit_data: dict, transformer: Transformer, publisher
     
     # TODO: Integrate Notion content here if relevant to the commit
     notion_content = "" # Placeholder for now
-
+    linkedin_summary = None
     # Generate content
     blog_post_content = transformer.generate_blog_post(
         commit_data['message'],
         commit_data["files"],
         notion_content
     )
-    linkedin_summary = transformer.generate_linkedin_summary(
-        commit_data['message'],
-        commit_data["files"],
-        notion_content
-    )
+    #linkedin_summary = transformer.generate_linkedin_summary(
+    #    commit_data['message'],
+    #    commit_data["files"],
+    #    notion_content
+    #)
     blog_post_title = transformer.generate_click_worthy_title(
         commit_data['message'],
         blog_post_content
@@ -128,10 +128,10 @@ def process_single_commit(commit_data: dict, transformer: Transformer, publisher
     if post_id:
         logger.info(f"Successfully published blog post for commit {commit_data['sha'][:8]}. Post ID: {post_id}")
         # Save LinkedIn summary to a file
-        if linkedin_summary:
+        if linkedin_summary is not None:
             summary_filename = os.path.join(linkedin_summary_dir, f"linkedin_summary_{commit_data['sha'][:8]}.md")
             os.makedirs(linkedin_summary_dir, exist_ok=True)
-            with open(summary_filename, "w") as f:
+            with open(summary_filename, "w", encoding="utf-8") as f:
                 f.write(f"# LinkedIn Summary for Commit {commit_data['sha'][:8]}\n\n")
                 f.write(linkedin_summary)
             logger.info(f"LinkedIn summary saved to {summary_filename}")
@@ -143,7 +143,7 @@ def run_pipeline(mode: str, since_days: int = 7):
     Runs the automated blog generation pipeline.
 
     Args:
-        mode (str): \'batch\' to process all historical commits, \'incremental\' for new commits.
+        mode (str): 'batch' to process all historical commits, 'incremental' for new commits.
         since_days (int): Number of days to look back for incremental mode.
     """
     logger.info(f"Starting Automated Blog Generator pipeline in {mode} mode...")
@@ -174,92 +174,117 @@ def run_pipeline(mode: str, since_days: int = 7):
 
     # --- Ingestion Phase ---
     logger.info("Ingestion Phase: Fetching data...")
+
+    # 1. Fetch all recent/unprocessed commits from GitHub. This is our primary source.
     commits_to_process = []
     if mode == "batch":
         commits_to_process = ingester.fetch_github_commits(config["github_repo"], batch_mode=True) # type: ignore
-    elif mode == "incremental":
+    else: # incremental
         commits_to_process = ingester.fetch_github_commits(config["github_repo"], since_days=since_days) # type: ignore
-    else:
-        logger.error(f"Invalid mode: {mode}. Use \'batch\' or \'incremental\'.")
-        return
 
-    notion_notes = []
+    # 2. Fetch recent Notion notes to be used as optional enhancements.
+    notion_notes_by_sha = {}
     if config["notion_token"] and config["notion_database_id"]:
-        # Fetch Notion notes created/updated in the last 'since_days' for incremental mode
-        # For batch mode, you might want to fetch all notes or notes from a specific period
         notion_since_date = datetime.now() - timedelta(days=since_days) if mode == "incremental" else None
-        notion_notes = ingester.fetch_notion_notes(config["notion_database_id"], since_date=notion_since_date) # type: ignore
-        if notion_notes:
-            logger.info(f"Found {len(notion_notes)} Notion notes.")
+        notion_notes_by_sha = ingester.fetch_notion_notes(config["notion_database_id"], since_date=notion_since_date) # type: ignore
 
-    if not commits_to_process and not notion_notes:
-        logger.info("No new commits or Notion notes to process. Exiting pipeline.")
+    if not commits_to_process:
+        logger.info("No new commits to process. Exiting pipeline.")
         return
 
     # --- Transformation & Publishing Phase ---
     logger.info(f"Transformation & Publishing Phase: Processing {len(commits_to_process)} commits...")
+    posts_were_published = False
     linkedin_summary_output_dir = "linkedin_summaries"
+
+    # 3. Iterate through every commit.
     for commit_data in commits_to_process:
+        short_sha = commit_data['sha'][:7]
+        
+        # Check for a matching Notion note. This is the enhancement.
+        matching_note = notion_notes_by_sha.get(short_sha)
+        notion_content = ""
+        notion_title_for_log = ""
+        if matching_note:
+            notion_content = matching_note['content']
+            notion_title_for_log = matching_note['title']
+            logger.info(f"Processing commit {short_sha} - Found matching Notion note: '{notion_title_for_log}'")
+        else:
+            logger.info(f"Processing commit {short_sha} - No matching Notion note found.")
+
         try:
-            # Pass Notion content to process_single_commit if relevant mapping exists
-            # For now, we'll pass an empty string or implement a more sophisticated mapping
-            process_single_commit(commit_data, transformer, publisher, linkedin_summary_output_dir)
+            # Generate content using commit data and any available Notion content.
+            blog_post_content = transformer.generate_blog_post(
+                commit_message=commit_data['message'],
+                files_changed=commit_data["files"],
+                notion_content=notion_content
+            )
+            linkedin_summary = transformer.generate_linkedin_summary(
+                commit_message=commit_data['message'],
+                files_changed=commit_data["files"],
+                notion_content=notion_content
+            )
+            blog_post_title = transformer.generate_click_worthy_title(
+                commit_message=commit_data['message'],
+                blog_post_content=blog_post_content
+            )
+
+            if not blog_post_content or not blog_post_title:
+                logger.warning(f"Skipping commit {short_sha} due to empty generated content or title.")
+                continue
+
+            # Publish to WordPress
+            post_id = publisher.publish_post(
+                title=blog_post_title,
+                content_md=blog_post_content,
+                tags=["automated", "github", "gemini"],
+                categories=["Development"]
+            )
+
+            if post_id:
+                posts_were_published = True
+                logger.info(f"Successfully published post for commit {short_sha}. Post ID: {post_id}")
+                # Mark commit as processed only after successful publication
+                ingester.mark_as_processed(commit_data['sha'])
+
+                # Save LinkedIn summary to a file
+                if linkedin_summary:
+                    summary_filename = os.path.join(linkedin_summary_output_dir, f"linkedin_summary_{short_sha}.md")
+                    os.makedirs(linkedin_summary_output_dir, exist_ok=True)
+                    with open(summary_filename, "w", encoding="utf-8") as f:
+                        f.write(f"# LinkedIn Summary for Commit {short_sha}\n\n")
+                        if notion_title_for_log:
+                            f.write(f"Based on Notion Note: \"{notion_title_for_log}\"\n\n")
+                        f.write(linkedin_summary)
+                    logger.info(f"LinkedIn summary saved to {summary_filename}")
+            else:
+                logger.error(f"Failed to publish post for commit {short_sha}.")
+
         except Exception as e:
-            logger.error(f"Failed to process commit {commit_data['sha'][:8]} after retries: {e}", exc_info=True)
-
-    # TODO: Process Notion notes into blog posts if desired
-    if notion_notes:
-        logger.info(f"Processing {len(notion_notes)} Notion notes...")
-        for note in notion_notes:
-            try:
-                logger.info(f"Processing Notion note: {note['title']}")
-                # Example: Generate blog post from Notion note
-                blog_post_content = transformer.generate_blog_post(
-                    commit_message=f"Notion Note: {note['title']}",
-                    files_changed=[], # No files changed for Notion notes
-                    notion_content=note['content']
-                )
-                blog_post_title = transformer.generate_click_worthy_title(
-                    commit_message=f"Notion Note: {note['title']}",
-                    blog_post_content=blog_post_content
-                )
-
-                if not blog_post_content or not blog_post_title:
-                    logger.warning(f"Skipping Notion note {note['title']} due to empty generated content or title.")
-                    continue
-
-                post_id = publisher.publish_post(
-                    title=blog_post_title,
-                    content_md=blog_post_content,
-                    tags=["automated", "notion"], # Example tags for Notion posts
-                    categories=["Notes"] # Example category for Notion posts
-                )
-                if post_id:
-                    logger.info(f"Successfully published blog post for Notion note {note['title']}. Post ID: {post_id}")
-                else:
-                    logger.error(f"Failed to publish blog post for Notion note {note['title']}.")
-            except Exception as e:
-                logger.error(f"Error processing Notion note {note['title']}: {e}", exc_info=True)
+            logger.error(f"Failed to process commit {short_sha} due to an unexpected error: {e}", exc_info=True)
 
     # --- Export & Deployment Phase ---
-    logger.info("Export & Deployment Phase: Generating static site and deploying...")
-    try:
-        if exporter.trigger_simply_static_export():
-            if exporter.wait_for_export_completion():
-                logger.info("Simply Static export completed. Proceeding to deployment.")
-                if deployer.deploy(commit_message="Automated blog update from pipeline"): # Use a generic commit message for deployment
-                    logger.info("Static site successfully deployed to GitHub Pages.")
+    if posts_were_published:
+        logger.info("Export & Deployment Phase: Generating static site and deploying...")
+        try:
+            if exporter.trigger_simply_static_export():
+                if exporter.wait_for_export_completion():
+                    logger.info("Simply Static export completed. Proceeding to deployment.")
+                    if deployer.deploy(commit_message="Automated blog update from pipeline"):
+                        logger.info("Static site successfully deployed to GitHub Pages.")
+                    else:
+                        logger.error("Failed to deploy static site to GitHub Pages.")
                 else:
-                    logger.error("Failed to deploy static site to GitHub Pages.")
+                    logger.error("Simply Static export did not complete in time.")
             else:
-                logger.error("Simply Static export did not complete in time.")
-        else:
-            logger.error("Failed to trigger Simply Static export.")
-    except Exception as e:
-        logger.error(f"Error during export or deployment phase: {e}", exc_info=True)
+                logger.error("Failed to trigger Simply Static export.")
+        except Exception as e:
+            logger.error(f"Error during export or deployment phase: {e}", exc_info=True)
+    else:
+        logger.info("No new posts were published. Skipping export and deployment.")
 
     logger.info("Automated Blog Generator pipeline finished.")
-
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Automated Blog Generator Pipeline.")
     parser.add_argument(

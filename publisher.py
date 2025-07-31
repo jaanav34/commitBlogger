@@ -8,6 +8,7 @@ import os
 import logging
 import mimetypes
 import socket
+import markdown
 from typing import Optional
 from wordpress_xmlrpc import Client, WordPressPost
 from wordpress_xmlrpc.methods.posts import NewPost, EditPost
@@ -66,7 +67,7 @@ class Publisher:
         """
         post = WordPressPost()
         post.title = title  # type: ignore
-        post.content = content_md  # type: ignore
+        post.content = markdown.markdown(content_md) # type:ignore
         post.post_status = status  # type: ignore
 
         terms_names_dict = {}
@@ -111,7 +112,7 @@ class Publisher:
         """
         post = WordPressPost()
         if title: post.title = title  # type: ignore
-        if content_md: post.content = content_md  # type: ignore
+        if content_md: post.content = markdown.markdown(content_md) # type: ignore
         if status: post.post_status = status  # type: ignore
 
         terms_names_dict = {}

@@ -4,6 +4,7 @@ Ingestion Module: Handles fetching data from GitHub and Notion, and managing pro
 """
 
 import os
+import re
 import json
 import logging
 from datetime import datetime, timedelta
@@ -49,6 +50,11 @@ class Ingester:
                 logger.warning(f"Corrupted state file {self.state_file}. Starting with empty state.")
                 return set()
         return set()
+    
+    def mark_as_processed(self, sha: str):
+        """Adds a SHA to the processed set and saves the state file."""
+        self.processed_shas.add(sha)
+        self._save_processed_shas()
 
     def _save_processed_shas(self):
         """
@@ -162,7 +168,6 @@ class Ingester:
                 except Exception as e:
                     logger.error(f"Unexpected error processing commit {commit.sha}: {e}", exc_info=True)
 
-            self._save_processed_shas()
             logger.info(f"Fetched {len(commits_data)} new/unprocessed commits.")
             return commits_data
         except GithubException as e:
@@ -172,7 +177,7 @@ class Ingester:
             logger.critical(f"An unexpected error occurred during GitHub ingestion: {e}", exc_info=True)
             return []
 
-    def fetch_notion_notes(self, database_id: str, since_date: Optional[datetime]) -> list:
+    def fetch_notion_notes(self, database_id: str, since_date: Optional[datetime]) -> dict:
         """
         Fetches notes (pages) from a Notion database.
 
@@ -185,10 +190,10 @@ class Ingester:
         """
         if not self.notion_client:
             logger.warning("Notion client not initialized. Skipping Notion ingestion.")
-            return []
+            return {}
 
         logger.info(f"Fetching Notion notes from database {database_id}...")
-        notes_data = []
+        notes_data = {}
         try:
             filter_obj = None
             if since_date:
@@ -209,36 +214,44 @@ class Ingester:
                     filter=filter_obj,
                     start_cursor=start_cursor
                 )
-                for page in response["results"]: # type: ignore
+                for page in response["results"]:  # type: ignore
                     page_id = page["id"]
-                    # Extract title
                     title = self._get_notion_page_title(page)
+
+                    # Find a 7-character commit SHA in the title
+                    match = re.search(r'\b([0-9a-f]{7})\b', title, re.IGNORECASE)
+                    if not match:
+                        logger.info(f"Skipping Notion note '{title}' as it does not contain a 7-character commit SHA.")
+                        continue
+
+                    commit_sha_short = match.group(1).lower()
+                    logger.info(f"Found commit SHA '{commit_sha_short}' in Notion note '{title}'.")
                     
                     # Fetch block content
                     content_blocks = self.notion_client.blocks.children.list(block_id=page_id)
                     page_content = ""
-                    for block in content_blocks["results"]: # type: ignore
+                    for block in content_blocks["results"]:  # type: ignore
                         if "type" in block and block["type"] == "paragraph" and "rich_text" in block["paragraph"]:
                             for text_obj in block["paragraph"]["rich_text"]:
                                 if "plain_text" in text_obj:
                                     page_content += text_obj["plain_text"] + "\n"
-                        # TODO: Handle other block types (headings, lists, code blocks) as needed
-
-                    notes_data.append({
+                    
+                    notes_data[commit_sha_short] = {
                         'id': page_id,
                         'title': title,
                         'content': page_content,
                         'last_edited_time': page["last_edited_time"],
                         'url': page["url"]
-                    })
+                    }
+
                 has_more = response["has_more"] # type: ignore
                 start_cursor = response["next_cursor"] # type: ignore
 
-            logger.info(f"Fetched {len(notes_data)} Notion notes.")
+            logger.info(f"Fetched {len(notes_data)} Notion notes linked to commit SHAs.")
             return notes_data
         except Exception as e:
             logger.error(f"Error fetching Notion notes from database {database_id}: {e}", exc_info=True)
-            return []
+            return {}
 
     def get_processed_shas(self) -> set:
         """

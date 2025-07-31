@@ -8,5 +8,5 @@ requests==2.31.0
 # Optional dependencies for enhanced functionality
 python-dotenv==1.0.0  # For loading environment variables from .env file
 tenacity==8.2.3       # For retry logic with exponential backoff
-
+markdown==3.6         
 

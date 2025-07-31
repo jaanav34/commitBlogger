@@ -84,7 +84,7 @@ class Transformer:
                 # If patch is too long, ask Gemini to summarize it
                 if len(patch) > 1000: # Arbitrary threshold for large diffs
                     logger.info(f"Summarizing large diff for {filename} using Gemini.")
-                    summary_prompt = f"Summarize the following code diff for file {filename} ({status}):\n```\n{patch}\n```\nProvide a concise summary focusing on the key changes and their purpose."
+                    summary_prompt = f"Summarize the following code diff for file {filename} ({status}):\n```\n{patch}\n```\nProvide a concise summary focusing on the key changes and their purpose. If it is an initial commit, explain instead what the overall repository does, ignoring most of the peripheral details.\n"
                     diff_summary_text = self._call_gemini(summary_prompt)
                     diff_texts.append(f"File: {filename} ({status})\nSummary: {diff_summary_text}")
                 else:
@@ -111,30 +111,32 @@ class Transformer:
         """
         diff_summary = self._summarize_diff(files_changed)
         
-        prompt = f"""You are a technical blogger and a software engineer.
-Based on the following information, write a detailed and engaging Markdown-formatted blog post.
+        prompt = f"""You are an expert technical storyteller and a senior software engineer writing as me, Jaanav Shah, a Computer Engineering student at Purdue University's engineering blog. Your goal is to turn technical updates into engaging narratives.
 
-**Commit Message:**
-```
-{commit_message}
-```
+            Core Narrative & High-Level Context (from my Notion Note):
+            This is the main story. Use this as the foundation for the blog post. It explains the "why" and the "what".
 
-**Code Changes Summary:**
-```
-{diff_summary}
-```
+            Notion Note Content:
+            {notion_content if notion_content.strip() else "No high-level context was provided. You must infer the purpose from the commit message and code changes below."}
+            
+            Technical Implementation Details (from the Git Commit):
+            Use these details as technical evidence to support the core narrative. Weave them into the story to show how the goal was accomplished. Do not just list the changes.
 
-**Additional Context (from Notion notes, if any):**
-```
-{notion_content}
-```
+            Commit Message (this is super undetailed, do not write this in the blog content):
+            {commit_message}
 
-Your blog post should:
-1.  Explain what was implemented, changed, or fixed in a clear and concise manner.
-2.  Discuss why these changes are important, their impact, or how they fit into a larger project context.
-3.  Maintain technical clarity and readability, suitable for a developer audience.
-4.  Be approximately 300-500 words, structured with headings and bullet points where appropriate.
-5.  Include a brief introduction and conclusion.
+            Code Changes Summary:
+            {diff_summary}
+            
+            Your Task:
+            Write a detailed, engaging, and polished blog post in Markdown format.
+
+            Start with the narrative from the Notion note.
+            Integrate the technical details from the commit message and code summary to illustrate the points made in the narrative.
+            Explain the impact and importance of this update.
+            The final post should be well-structured with a clear introduction, body, and conclusion. Use headings and lists to improve readability.
+            Crucially, the tone should be that of a human expert explaining a project, not an AI summarizing a commit. The Notion note is the human's voice; amplify it.
+
 """
         logger.info("Generating blog post with Gemini...")
         return self._call_gemini(prompt)
