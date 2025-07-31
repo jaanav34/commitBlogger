@@ -169,6 +169,9 @@ class Ingester:
                     logger.error(f"Unexpected error processing commit {commit.sha}: {e}", exc_info=True)
 
             logger.info(f"Fetched {len(commits_data)} new/unprocessed commits.")
+            # Reverse the list to process commits from oldest to newest
+            commits_data.reverse()
+            logger.info("Commits sorted chronologically (oldest first).")
             return commits_data
         except GithubException as e:
             logger.critical(f"Failed to fetch GitHub repository {repo_name} due to API error: {e}")
