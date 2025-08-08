@@ -51,24 +51,21 @@ class Publisher:
            retry=retry_if_exception_type(xmlrpc_client.Fault),
            before_sleep=before_log(logger, logging.INFO), # type: ignore
            after=after_log(logger, logging.WARNING))
-    def publish_post(self, title: str, content_md: str, tags: Optional[list] = None, categories: Optional[list] = None, status: str = 'publish') -> Optional[str]:
+    def publish_post(self, title: str, content_html: str, tags: Optional[list] = None, categories: Optional[list] = None, status: str = 'publish') -> Optional[str]:
         """
         Publishes a new post to WordPress.
 
         Args:
             title (str): The title of the blog post.
-            content_md (str): The content of the blog post in Markdown format.
-            tags (list, optional): A list of tags for the post. Defaults to None.
-            categories (list, optional): A list of categories for the post. Defaults to None.
-            status (str): The status of the post (e.g., 'publish', 'draft'). Defaults to 'publish'.
-
-        Returns:
-            Optional[str]: The ID of the newly created post, or None if an error occurred.
+            content_html (str): The content of the blog post in HTML format.
+            ...
         """
         post = WordPressPost()
         post.title = title  # type: ignore
-        post.content = markdown.markdown(content_md) # type:ignore
+        # CHANGE THIS LINE:
+        post.content = content_html  # type: ignore
         post.post_status = status  # type: ignore
+
 
         terms_names_dict = {}
         if tags:

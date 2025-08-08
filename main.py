@@ -19,6 +19,8 @@ from transform import Transformer
 from publisher import Publisher
 from exporter import Exporter
 from deployer import Deployer
+from sanitizer import Sanitizer
+import markdown
 
 # Load environment variables from .env file
 load_dotenv()
@@ -84,60 +86,6 @@ def load_env_variables():
     
     return config
 
-
-@retry(wait=wait_exponential(multiplier=1, min=4, max=10),
-       stop=stop_after_attempt(3),
-       before_sleep=before_log(logger, logging.INFO),
-       after=after_log(logger, logging.WARNING))
-async def process_single_commit(commit_data: dict, transformer: Transformer, publisher: Publisher, linkedin_summary_dir: str):
-    """
-    Processes a single commit: generates content and publishes to WordPress.
-    """
-    logger.info(f"Processing commit: {commit_data['sha'][:8]} - {commit_data['message'].splitlines()[0]}")
-    
-    # TODO: Integrate Notion content here if relevant to the commit
-    notion_content = "" # Placeholder for now
-    linkedin_summary = None
-    # Generate content
-    blog_post_content = await transformer.generate_blog_post(
-        commit_data['message'],
-        commit_data["files"],
-        notion_content
-    )
-    #linkedin_summary = await transformer.generate_linkedin_summary(
-    #    commit_data['message'],
-    #    commit_data["files"],
-    #    notion_content
-    #)
-    blog_post_title = await transformer.generate_click_worthy_title(
-        commit_data['message'],
-        blog_post_content
-    )
-
-    if not blog_post_content or not blog_post_title:
-        logger.warning(f"Skipping commit {commit_data['sha'][:8]} due to empty generated content or title.")
-        return
-
-    # Publish to WordPress
-    post_id = publisher.publish_post(
-        title=blog_post_title,
-        content_md=blog_post_content,
-        tags=["automated", "github", "gemini"], # Example tags
-        categories=["Development"] # Example category
-    )
-
-    if post_id:
-        logger.info(f"Successfully published blog post for commit {commit_data['sha'][:8]}. Post ID: {post_id}")
-        # Save LinkedIn summary to a file
-        if linkedin_summary is not None:
-            summary_filename = os.path.join(linkedin_summary_dir, f"linkedin_summary_{commit_data['sha'][:8]}.md")
-            os.makedirs(linkedin_summary_dir, exist_ok=True)
-            with open(summary_filename, "w", encoding="utf-8") as f:
-                f.write(f"# LinkedIn Summary for Commit {commit_data['sha'][:8]}\n\n")
-                f.write(linkedin_summary)
-            logger.info(f"LinkedIn summary saved to {summary_filename}")
-    else:
-        logger.error(f"Failed to publish blog post for commit {commit_data['sha'][:8]}.")
 
 async def run_pipeline(mode: str, since_days: int = 7):
     """
@@ -206,6 +154,7 @@ async def run_pipeline(mode: str, since_days: int = 7):
             gemini_api_key=config["gemini_api_key"], # type: ignore
             model_configs=config["model_configs"] # type: ignore
         )
+        sanitizer = Sanitizer()
         blog_cache_dir = "generated_blogs"
         github_repo_name = config["github_repo_name"]
 
@@ -219,13 +168,20 @@ async def run_pipeline(mode: str, since_days: int = 7):
                 path = os.path.join(blog_cache_dir, filename)
                 with open(path, "r", encoding="utf-8") as f:
                     content_md = f.read()
+                # --- NEW REPOST WORKFLOW ---
+                # 1. Convert cached Markdown to HTML
+                content_html = markdown.markdown(content_md)
+                # 2. Sanitize the HTML
+                sanitized_html = sanitizer.sanitize_content(content_html)
+                
                 title = await transformer.generate_click_worthy_title(
-                    blog_post_content=content_md
+                    blog_post_content=content_md # Title generation can still use MD
                 )
+                
                 try:
                     post_id = publisher.publish_post(
                         title=title,
-                        content_md=content_md,
+                        content_html=sanitized_html,
                         tags=["automated", "github", "gemini"],
                         categories=[f"{github_repo_name}"]
                     )
@@ -261,6 +217,7 @@ async def run_pipeline(mode: str, since_days: int = 7):
         local_repo_path=config["simply_static_export_path"], # type: ignore
         github_repo_url=config["github_pages_repo_url"] # type: ignore
     )
+    sanitizer = Sanitizer()
 
     # --- Ingestion Phase ---
     logger.info("Ingestion Phase: Fetching data...")
@@ -323,7 +280,7 @@ async def run_pipeline(mode: str, since_days: int = 7):
 
         try:
             # Generate content asynchronously
-            blog_post_content = await transformer.generate_blog_post(
+            blog_post_content_md = await transformer.generate_blog_post(
                 commit_message=commit_data['message'],
                 files_changed=commit_data["files"],
                 notion_content=notion_content,
@@ -333,6 +290,13 @@ async def run_pipeline(mode: str, since_days: int = 7):
             if not blog_post_content:
                 logger.warning(f"Skipping commit {short_sha} due to empty generated blog content.")
                 continue
+
+             # --- NEW WORKFLOW ---
+            # 1. Convert AI-generated Markdown to HTML
+            content_html = markdown.markdown(blog_post_content_md)
+            # 2. Sanitize the resulting HTML
+            sanitized_html = sanitizer.sanitize_content(content_html)
+
 
             # These can run concurrently after the main blog post is done
             title_task = transformer.generate_click_worthy_title(
@@ -351,7 +315,7 @@ async def run_pipeline(mode: str, since_days: int = 7):
             # Publish to WordPress
             post_id = publisher.publish_post(
                 title=blog_post_title,
-                content_md=blog_post_content,
+                content_html=sanitized_html,
                 tags=["automated", "github", "gemini"],
                 categories=[f"{github_repo_name}"]
             )
@@ -362,7 +326,7 @@ async def run_pipeline(mode: str, since_days: int = 7):
                 
                 # Cache the successful post
                 with open(blog_cache_path, "w", encoding="utf-8") as f:
-                    f.write(blog_post_content)
+                    f.write(blog_post_content_md)
                 logger.info(f"Blog post for {short_sha} cached successfully.")
 
                 # Add to context for the next iteration
