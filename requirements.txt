@@ -10,3 +10,5 @@ python-dotenv==1.0.0  # For loading environment variables from .env file
 tenacity==8.2.3       # For retry logic with exponential backoff
 markdown==3.6         
 
+beautifulsoup4==4.12.3
+lxml==5.2.2 

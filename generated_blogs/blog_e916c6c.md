@@ -33,11 +33,11 @@ Our `post_process_latex` function, which serves as the ultimate quality control 
 *   **Correcting Carets in Math Mode (`fix_carets`):** Another common LLM oversight is incorrect use of carets (`^`) in mathematical expressions. This targeted fix ensures that these are handled appropriately within math environments, preventing syntax errors and ensuring correct rendering of exponents and other superscripts.
 
 *   **Transforming "Lonely Items" into Proper Lists (`fix_lonely_items`):** One of the biggest visual improvements comes from this function. Often, AI will generate lists that look like:
-    ```
+
     1. First item
     2. Second item
     - Another item
-    ```
+
     These are just plain text. This new function intelligently detects blocks of text that *look* like lists (even those starting with `-` or `*`) but aren't wrapped in LaTeX's `enumerate` or `itemize` environments. It then automatically wraps them, turning informal notes into beautifully formatted, professional, and correctly numbered or bulleted lists. This significantly enhances the academic polish of the generated documents.
 
 *   **Deeply Nested Itemize Prevention (`remap_fourth_itemize`):** LaTeX has limitations on how deeply you can nest `itemize` environments before it throws errors. This function cleverly re-maps very deeply nested lists (e.g., beyond the third level) to a custom `itemizeDeep` environment, preventing compilation failures for complex outlines or highly detailed notes.

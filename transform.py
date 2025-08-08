@@ -8,6 +8,7 @@ import time
 import os
 import google.generativeai as genai
 import logging
+from typing import Optional
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_log, after_log
 
 # Configure logging for this module
@@ -253,7 +254,7 @@ class Transformer:
         logger.info("Generating LinkedIn summary with Gemini...")
         return await self._call_gemini_async('linkedin', prompt)
 
-    async def generate_click_worthy_title(self, commit_message: str, blog_post_content: str) -> str:
+    async def generate_click_worthy_title(self, blog_post_content: str, commit_message: Optional[str] = None ) -> str:
         """
         Generates a click-worthy and SEO-friendly title for the blog post.
         """
@@ -262,7 +263,7 @@ class Transformer:
     Prioritize titles that are engaging, informative, and include relevant keywords.
 
     **Commit Message:**
-    {commit_message}
+    {commit_message if commit_message else "No commit message provided."}
 
     Generated code
     **Blog Post Content (for context):**

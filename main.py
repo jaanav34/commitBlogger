@@ -35,6 +35,7 @@ def load_env_variables():
     config = {
         "github_token": os.getenv("GITHUB_TOKEN"),
         "github_repo": os.getenv("GITHUB_REPO"),
+        "github_repo_name": os.getenv("GITHUB_REPO_NAME"),
         "gemini_api_key": os.getenv("GEMINI_API_KEY"),
         "notion_token": os.getenv("NOTION_TOKEN"),
         "notion_database_id": os.getenv("NOTION_DATABASE_ID"),
@@ -192,6 +193,49 @@ async def run_pipeline(mode: str, since_days: int = 7):
         
         logger.info("Export-only mode finished.")
         return # Exit the pipeline early
+    
+    elif mode == "repost":
+        logger.info("Running in repost mode: Republishing cached blog posts to WordPress.")
+        config = load_env_variables()
+        publisher = Publisher(
+            xmlrpc_url=config["wp_xmlrpc_url"],  # type: ignore
+            username=config["wp_username"],      # type: ignore
+            app_password=config["wp_app_password"]  # type: ignore
+        )
+        transformer = Transformer(
+            gemini_api_key=config["gemini_api_key"], # type: ignore
+            model_configs=config["model_configs"] # type: ignore
+        )
+        blog_cache_dir = "generated_blogs"
+        github_repo_name = config["github_repo_name"]
+
+        if not os.path.exists(blog_cache_dir):
+            logger.warning(f"No cached blog directory found at {blog_cache_dir}. Nothing to repost.")
+            return
+
+        for filename in sorted(os.listdir(blog_cache_dir)):
+            if filename.endswith(".md"):
+                sha = filename[len("blog_"):-len(".md")]
+                path = os.path.join(blog_cache_dir, filename)
+                with open(path, "r", encoding="utf-8") as f:
+                    content_md = f.read()
+                title = await transformer.generate_click_worthy_title(
+                    blog_post_content=content_md
+                )
+                try:
+                    post_id = publisher.publish_post(
+                        title=title,
+                        content_md=content_md,
+                        tags=["automated", "github", "gemini"],
+                        categories=[f"{github_repo_name}"]
+                    )
+                    if post_id:
+                        logger.info(f"Reposted cached blog for commit {sha}. Post ID: {post_id}")
+                    else:
+                        logger.error(f"Failed to repost cached blog for commit {sha}")
+                except Exception as e:
+                    logger.error(f"Error reposting commit {sha}: {e}", exc_info=True)
+        return
 
     # Initialize modules
     ingester = Ingester(
@@ -302,13 +346,14 @@ async def run_pipeline(mode: str, since_days: int = 7):
             )
             
             blog_post_title, linkedin_summary = await asyncio.gather(title_task, linkedin_task)
+            github_repo_name = config["github_repo_name"]
 
             # Publish to WordPress
             post_id = publisher.publish_post(
                 title=blog_post_title,
                 content_md=blog_post_content,
                 tags=["automated", "github", "gemini"],
-                categories=["Development"]
+                categories=[f"{github_repo_name}"]
             )
 
             if post_id:
@@ -377,7 +422,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode", 
         type=str, 
-        choices=["batch", "incremental", "export"], 
+        choices=["batch", "incremental", "export", "repost"],
         default="incremental",
         help="Operation mode: 'batch' for historical, 'incremental' for new, 'export' to only run the static site export and deployment."
     )
