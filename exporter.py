@@ -125,7 +125,6 @@ class Exporter:
         """
         return self.export_path
 
-# Example Usage (for testing purposes, will be removed in final main.py)
 if __name__ == '__main__':
     # These would typically come from environment variables
     WP_URL = os.getenv("WP_URL", "http://localhost/wordpress")

@@ -196,34 +196,25 @@ class Transformer:
             ---
             """
             
-        prompt = f"""You are an expert technical storyteller and a senior software engineer writing as me, Jaanav Shah, a Computer Engineering student at Purdue University's engineering blog. Your goal is to turn technical updates into engaging narratives.
+        prompt = f"""Write a technical blog post in Markdown format based on the information below. The tone should be that of an engineer explaining their own project — first-person, direct, and focused on the "why" behind the work.
 
-            Previous Blog Posts (already made by you, automatically updating):
             {context_prompt_part}
 
-            Core Narrative & High-Level Context (from my Notion Note):
-            This is the main story. Use this as the foundation for the blog post. It explains the "why" and the "what".
-            Notion Note Content:
-            {notion_content if notion_content.strip() else "No high-level context was provided. You must infer the purpose from the commit message and code changes below."}
-            
-            Technical Implementation Details (from the Git Commit):
-            Use these details as technical evidence to support the core narrative. Weave them into the story to show how the goal was accomplished. Do not just list the changes.
+            High-Level Context (from Notion note):
+            {notion_content if notion_content.strip() else "Not provided — infer the purpose from the commit message and code changes below."}
 
-            Commit Message (this is super undetailed, do not write this in the blog content):
+            Commit Message:
             {commit_message}
 
             Code Changes Summary:
             {diff_summary}
-            
-            Your Task:
-            Write a detailed, engaging, and polished blog post in Markdown format.
-            1.  Read the previous blog posts to understand the project's progression.
-            Start with the narrative from the Notion note (unless not provided)
-            Integrate the technical details from the commit message and code summary to illustrate the points made in the narrative.
-            Explain the impact and importance of this update.
-            4.  **Crucially, make the new post a distinct, valuable addition. Do not repeat content from the context.**
-            The final post should be well-structured with a clear introduction, body, and conclusion. Use headings and lists to improve readability.
-            Crucially, the tone should be that of a human expert explaining a project, not an AI summarizing a commit. The Notion note is the human's voice; amplify it.
+
+            Instructions:
+            1. Use the Notion note as the narrative foundation if provided; otherwise lead with the commit context.
+            2. Weave in the technical details from the code changes to support the story — don't just list them.
+            3. Explain the impact and reasoning behind the update.
+            4. Keep the post distinct from the previous posts — do not repeat existing content.
+            5. Structure it with a clear introduction, body, and conclusion. Use headings and lists for readability.
 
 """
         logger.info("Generating blog post with Gemini...")
@@ -265,7 +256,6 @@ class Transformer:
     **Commit Message:**
     {commit_message if commit_message else "No commit message provided."}
 
-    Generated code
     **Blog Post Content (for context):**
     {blog_post_content}
 
@@ -278,7 +268,6 @@ class Transformer:
 
 
     
-# Example Usage (for testing purposes, will be removed in final main.py)
 if __name__ == '__main__':
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 

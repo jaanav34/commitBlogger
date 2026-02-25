@@ -287,21 +287,17 @@ async def run_pipeline(mode: str, since_days: int = 7):
                 aggregated_context=aggregated_context
             )
             
-            if not blog_post_content:
+            if not blog_post_content_md:
                 logger.warning(f"Skipping commit {short_sha} due to empty generated blog content.")
                 continue
 
-             # --- NEW WORKFLOW ---
-            # 1. Convert AI-generated Markdown to HTML
             content_html = markdown.markdown(blog_post_content_md)
-            # 2. Sanitize the resulting HTML
             sanitized_html = sanitizer.sanitize_content(content_html)
-
 
             # These can run concurrently after the main blog post is done
             title_task = transformer.generate_click_worthy_title(
                 commit_message=commit_data['message'],
-                blog_post_content=blog_post_content
+                blog_post_content=blog_post_content_md
             )
             linkedin_task = transformer.generate_linkedin_summary(
                 commit_message=commit_data['message'],
@@ -330,7 +326,7 @@ async def run_pipeline(mode: str, since_days: int = 7):
                 logger.info(f"Blog post for {short_sha} cached successfully.")
 
                 # Add to context for the next iteration
-                aggregated_context += f"\n\n--- Blog Post for Commit {short_sha} ---\n{blog_post_content}"
+                aggregated_context += f"\n\n--- Blog Post for Commit {short_sha} ---\n{blog_post_content_md}"
 
                 # Mark commit as processed only after successful publication and caching
                 ingester.mark_as_processed(commit_data['sha'])

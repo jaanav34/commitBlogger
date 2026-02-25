@@ -86,7 +86,7 @@ GITHUB_PAGES_REPO_URL="https://github.com/your_github_username/your_pages_repo.g
 SIMPLY_STATIC_TRIGGER_URL="http://your-local-site.local/?simply_static_export=1"
 ```
 
-For detailed instructions on obtaining these credentials, please refer to the [Configuration and State Management Guide](https://www.google.com/search?q=guides/Configuration%2520and%2520State%2520Management%2520Guide.md).
+For detailed instructions on obtaining these credentials, please refer to the [Configuration and State Management Guide](guides/Configuration%20and%20State%20Management%20Guide.md).
 
 -----
 

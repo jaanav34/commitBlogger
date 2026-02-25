@@ -147,7 +147,6 @@ class Deployer:
             logger.error(f"An unexpected error occurred during deployment: {e}", exc_info=True)
             return False
 
-# Example Usage (for testing purposes, will be removed in final main.py)
 if __name__ == '__main__':
     # These would typically come from environment variables
     STATIC_EXPORT_PATH = os.getenv("SIMPLY_STATIC_EXPORT_PATH", "/tmp/simply-static-export")

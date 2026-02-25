@@ -62,7 +62,6 @@ class Publisher:
         """
         post = WordPressPost()
         post.title = title  # type: ignore
-        # CHANGE THIS LINE:
         post.content = content_html  # type: ignore
         post.post_status = status  # type: ignore
 
@@ -219,7 +218,6 @@ class Publisher:
             logger.error(f"Unexpected error ensuring category '{category_name}': {e}", exc_info=True)
             return False
 
-# Example Usage (for testing purposes, will be removed in final main.py)
 if __name__ == '__main__':
     # These would typically come from environment variables
     WP_XMLRPC_URL = os.getenv('WP_XMLRPC_URL', 'http://localhost/wordpress/xmlrpc.php')

@@ -262,7 +262,6 @@ class Ingester:
         """
         return self.processed_shas
 
-# Example Usage (for testing purposes, will be removed in final main.py)
 if __name__ == '__main__':
     # These would typically come from environment variables
     GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
